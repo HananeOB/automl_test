@@ -6,6 +6,7 @@ from oboe import AutoLearner, error
 import numpy as np 
 from autosklearn.classification import AutoSklearnClassifier
 import pickle 
+from datetime import date 
 
 
 def read_abalone_dataframe() :
@@ -46,14 +47,7 @@ def read_yeast_dataframe() :
     return dataframe 
 
 
-
-# TODO Shuffle data before reading it
-# TODO Save models (date et heure !!)  
-# Pas de German 
-
-
 def split_k_folds(k, dataframe) :
-
     """ Split data to k folds """
     # Shuffle data 
     dataframe = dataframe.sample(frac=1, random_state=42)
@@ -66,10 +60,12 @@ def split_k_folds(k, dataframe) :
     
     return folds 
 
+
 def launch_tpot(x_train, y_train, duration) :
     tpot_clf = TPOTClassifier(verbosity=2, max_time_mins=duration )
     tpot_clf.fit(x_train, y_train)
     return tpot_clf 
+
 
 def launch_oboe(x_train, y_train, duration) :
     method = 'Oboe'  
@@ -84,10 +80,14 @@ def launch_oboe(x_train, y_train, duration) :
     return oboe_clf
 
 
-def launch_autosklearn(x_train, y_train, duration) :
+# Error when tryning to return the classifier generated (so we save during)
+def launch_autosklearn(x_train, y_train, duration, x_val, i, dataset, today) :
     autosklearn_clf = AutoSklearnClassifier(time_left_for_this_task=duration*60, memory_limit= None )
     autosklearn_clf.fit(x_train, y_train)
-    return autosklearn_clf 
+    pickle.dump(autosklearn_clf, open(f"autosklearn_clf_{dataset}_{duration}_{i+1}_{today}.sav", 'wb'))
+    print("model saved")
+    y_predicted = autosklearn_clf.predict(x_val)
+    return y_predicted 
 
 def launch_classifier(tool, x_train, y_train, duration):
     if tool == "oboe" :
@@ -124,10 +124,6 @@ def get_train_val(train_dataset, val_datatset, dataset, tool):
     
     return x_train, y_train, x_val, y_val  
     
-    
-        
-    
-
 
 def main() :
     tool = sys.argv[1]
@@ -136,6 +132,10 @@ def main() :
     k_folds = int(sys.argv[4])
     
     accuracy = []
+    mean = 0
+    today = date.today()
+    today = today.strftime("%d-%m-%Y")
+
     # Read data
     if dataset == "abalone" :
         dataframe = read_abalone_dataframe()
@@ -144,10 +144,9 @@ def main() :
     else :
         raise Exception("Not valid dataset")
     
-    print(dataframe.head())
     # Split data 
     folds = split_k_folds(k_folds, dataframe)
-    print(folds[0].head())
+    
     # launch training 
     for i in range(k_folds) :
         print(i)
@@ -158,37 +157,48 @@ def main() :
             if j != i :
                 train_dataset = pd.concat([train_dataset, folds[j]])
 
-        print(train_dataset.head())
         x_train, y_train, x_val, y_val = get_train_val(train_dataset, val_datatset, dataset, tool)
         
-        print(f"launch classifier {tool} for the {i+1} eme split")
-        clf = launch_classifier(tool, x_train, y_train, duration)
-        print("training completed")
+        if tool != "autosklearn" :
+            
+            print(f"launch classifier {tool} for the {i+1} eme split")
+            clf = launch_classifier(tool, x_train, y_train, duration)
+            print("training completed")
         
-        # Save classifier
-        if  tool == "tpot" :
-            clf.export(f"{tool}_clf_{dataset}_{duration}_{i+1}.sav")
-        else :
-            pickle.dump(clf, open(f"{tool}_clf_{dataset}_{duration}_{i+1}.sav", 'wb'))
-        print("model saved")
         
-        # Get accuracy 
-        if tool == "oboe" :
-            y_predicted = clf.predict(x_val)[0]
+            # Save classifier
+            if  tool == "tpot" :
+                clf.export(f"{tool}_clf_{dataset}_{duration}_{i+1}.sav")
+            else :
+                pickle.dump(clf, open(f"{tool}_clf_{dataset}_{duration}_{i+1}_{today}.sav", 'wb'))
+            print("model saved")
+            
+            # Get accuracy 
+            if tool == "oboe" :
+                y_predicted = clf.predict(x_val)[0]
+            else :
+                y_predicted = clf.predict(x_val)
+        
         else :
-            y_predicted = clf.predict(x_val)
+            print(f"launch classifier {tool} for the {i+1} eme split")
+            y_predicted = launch_autosklearn(x_train, y_train, duration, x_val, i, dataset, today  )
+            print("training completed")
         
         value = accuracy_score(y_val, y_predicted)
-        accuracy.append(value) 
+        mean  = mean + value
+        accuracy.append(str(value)) 
         print(f"accuracy : {value}")
     
     # print accuracy list 
     print(accuracy)
     # print mean accuracy 
-    print(np.mean(np.array(accuracy)))
-        
-        
+    mean = mean / k_folds
+    print(mean)
 
+    with open(f"{tool}_clf_accuracy_{dataset}_{duration}_{today}.sav", 'w') as f :
+        f.write(" - ".join(accuracy) + "\n")
+        f.write(f"mean -->{mean}")
+        
 
 if __name__ == "__main__" :
     main()
